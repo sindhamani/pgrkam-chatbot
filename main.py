@@ -8,6 +8,8 @@ from pydantic import BaseModel
 # To secure your API key, we will use environment variables.
 # Create a file named .env in the same directory and add your key like this:
 # GEMINI_API_KEY="your_api_key_here"
+#GEMINI_API_KEY="AIzaSyAg8wYr1UEesnnn4SP9KZE2aaiqo6m-h4k" - for reference only, to be deleted since it is more secure to load this from the .env hidden file.
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -17,8 +19,13 @@ model = genai.GenerativeModel('gemini-1.5-pro-latest')
 # --- FastAPI App ---
 app = FastAPI()
 
-# Allow connections from your Hostinger frontend
-origins = ["*"]  # For development, "*" is okay. For production, specify your domain.
+# This is the crucial security update.
+# It tells your backend to only accept requests from your frontend website.
+origins = [
+    "https://pkgassist.site",
+    "http://pkgassist.site",
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -27,21 +34,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Define the request data structure
+# This defines the data structure for incoming chat messages
 class ChatRequest(BaseModel):
     message: str
 
+# This is the root endpoint for testing
 @app.get("/")
 def read_root():
-    return {"message": "Hello from Bengaluru! The PGRKAM Backend is running!"}
+    return {"message": "PGRKAM Backend is live!"}
 
+# This is the main endpoint for your chatbot
 @app.post("/chat")
 async def handle_chat(chat_request: ChatRequest):
     try:
         # Send the user's message to the Gemini model
         response = model.generate_content(chat_request.message)
-
-        # Return the model's response
+        
+        # Return the model's text response
         return {"reply": response.text}
     except Exception as e:
-        return {"reply": f"An error occurred: {e}"}
+        print(f"An error occurred: {e}")
+        return {"reply": "Sorry, I encountered an error."}
