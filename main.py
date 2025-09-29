@@ -6,30 +6,27 @@ from pydantic import BaseModel
 from datetime import datetime
 import asyncio
 
-# --- Configuration ---
+# --- Configuration & Helper ---
 from dotenv import load_dotenv
 load_dotenv()
 
-# --- Helper Function ---
 def mask_api_key(api_key):
-    """Masks the API key, showing only the last 4 characters."""
     if not api_key or len(api_key) <= 4:
-        return "Invalid or too short"
+        return "Not Set or Invalid"
     return f"...{api_key[-4:]}"
 
-# Global variable to hold Gemini status
+# Global variables
 gemini_status = {"status": "unverified", "details": "Checking on startup..."}
 api_key_from_env = os.getenv("GEMINI_API_KEY")
 masked_key = mask_api_key(api_key_from_env)
 
-# --- Startup Event ---
+# --- Startup Event to Check Gemini ---
 async def check_gemini_on_startup():
-    """Checks Gemini API connectivity when the application starts."""
     global gemini_status
     try:
         if not api_key_from_env:
-            raise ValueError("GEMINI_API_KEY not found in environment.")
-            
+            raise ValueError("GEMINI_API_KEY not found in .env file.")
+        
         genai.configure(api_key=api_key_from_env)
         model = genai.GenerativeModel('gemini-1.5-pro-latest')
         model.generate_content("test", generation_config={"max_output_tokens": 1})
@@ -57,21 +54,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Define the request data structure
+# Define request data structure
 class ChatRequest(BaseModel):
     message: str
 
 # --- API Endpoints ---
 
 @app.get("/")
-def read_root():
-    """Returns the backend's root message."""
-    return {"message": "PGRKAM Backend is live! Visit /status for detailed health check."}
-
-@app.get("/status")
-def get_status():
+def read_root_and_status():
     """Returns a detailed status of the backend and its connection to Gemini."""
     return {
+        "message": "PGRKAM Backend is live!",
         "backend_status": "active",
         "timestamp": datetime.now().isoformat(),
         "gemini_api_key_loaded": masked_key,
@@ -80,7 +73,7 @@ def get_status():
 
 @app.post("/chat")
 async def handle_chat(chat_request: ChatRequest):
-    """Handles chat requests by sending them to the Gemini API."""
+    """Handles chat requests and logs them."""
     print(f"Received message: '{chat_request.message}'")
     try:
         model = genai.GenerativeModel('gemini-1.5-pro-latest')
