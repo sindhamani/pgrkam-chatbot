@@ -1,0 +1,52 @@
+runtime: python39
+
+# Environment variables
+env_variables:
+  GEMINI_API_KEY: "your_gemini_api_key_here"
+  GOOGLE_APPLICATION_CREDENTIALS: "/app/credentials.json"
+  GOOGLE_CLOUD_PROJECT: "your-project-id"
+  GOOGLE_CLOUD_LOCATION: "us-central1"
+  USE_VERTEX_AI: "true"
+  DATABASE_URL: "sqlite:///chatbot.db"
+  SPEECH_RATE: "150"
+  SPEECH_VOLUME: "0.8"
+  VOICE_GENDER: "male"
+  CHUNK_SIZE: "1000"
+  CHUNK_OVERLAP: "200"
+  TOP_K_RESULTS: "3"
+  MAX_TOKENS: "2048"
+  TEMPERATURE: "0.7"
+  MAX_JOB_RECOMMENDATIONS: "5"
+  PREFERENCE_WEIGHT: "0.7"
+
+# Instance configuration
+automatic_scaling:
+  min_instances: 1
+  max_instances: 10
+  target_cpu_utilization: 0.6
+  target_throughput_utilization: 0.6
+
+# Resources
+resources:
+  cpu: 1
+  memory_gb: 2
+  disk_size_gb: 10
+
+# Handlers
+handlers:
+- url: /.*
+  script: auto
+  secure: always
+
+# Basic scaling for better performance
+basic_scaling:
+  idle_timeout: 10m
+  max_instances: 5
+
+# VPC connector for Cloud SQL access (if needed)
+# vpc_access_connector:
+#   name: "projects/PROJECT_ID/locations/REGION/connectors/CONNECTOR_NAME"
+
+# Cloud SQL instance (if using Cloud SQL)
+# beta_settings:
+#   cloud_sql_instances: "PROJECT_ID:REGION:INSTANCE_NAME"
