@@ -8,13 +8,13 @@ class Config:
     """Configuration class for the PGRKAM Digital Assistant"""
     
     # API Keys
-    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyAg8wYr1UEesnnn4SP9KZE2aaiqo6m-h4k')
     GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
     
     # Vector Store Configuration (using Google Cloud alternatives)
     USE_VERTEX_AI = os.getenv('USE_VERTEX_AI', 'False').lower() == 'true'
-    PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT', '')
-    LOCATION = os.getenv('GOOGLE_CLOUD_LOCATION', 'us-central1')
+    PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT', 'poetic-bison-473505-v7')
+    LOCATION = os.getenv('GOOGLE_CLOUD_LOCATION', 'asia-south1-b')
     
     # Database Configuration
     DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///chatbot.db')
@@ -22,8 +22,7 @@ class Config:
     # Application Settings
     APP_NAME = os.getenv('APP_NAME', 'PGRKAM Digital Assistant')
     APP_VERSION = os.getenv('APP_VERSION', '1.0.0')
-    DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
-    
+    DEBUG = os.getenv('DEBUG', 'False').lower() == 'true' # Default DEBUG to False for production       
     # Language Settings
     DEFAULT_LANGUAGE = os.getenv('DEFAULT_LANGUAGE', 'en')
     SUPPORTED_LANGUAGES = os.getenv('SUPPORTED_LANGUAGES', 'en,hi,pa').split(',')
@@ -39,13 +38,16 @@ class Config:
     TOP_K_RESULTS = int(os.getenv('TOP_K_RESULTS', '3'))
     
     # Gemini Model Settings
-    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-pro')
+    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.0-pro')
     MAX_TOKENS = int(os.getenv('MAX_TOKENS', '2048'))
     TEMPERATURE = float(os.getenv('TEMPERATURE', '0.7'))
     
+    SQLITE_DB_PATH = os.getenv('SQLITE_DB_PATH', 'chatbot.db') # Explicitly define DB path
     # Google Cloud Settings
-    CLOUD_SQL_CONNECTION_NAME = os.getenv('CLOUD_SQL_CONNECTION_NAME', '')
-    CLOUD_STORAGE_BUCKET = os.getenv('CLOUD_STORAGE_BUCKET', '')
+    CLOUD_SQL_CONNECTION_NAME = os.getenv('CLOUD_SQL_CONNECTION_NAME', '') # e.g., "your-project:your-region:your-instance"
+    DB_USER = os.getenv('DB_USER', '')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+    DB_NAME = os.getenv('DB_NAME', '')
     
     # Job Recommendation Settings
     MAX_JOB_RECOMMENDATIONS = int(os.getenv('MAX_JOB_RECOMMENDATIONS', '5'))

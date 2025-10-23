@@ -3,658 +3,261 @@ import sqlite3
 import json
 import re
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict
 import logging
 
-# Google AI and Cloud dependencies
-import google.generativeai as genai
-from google.cloud import firestore
-from google.cloud import storage
-from google.cloud import aiplatform
-from google.cloud.sql.connector import Connector
-import sqlalchemy
+# --- Use Vertex AI SDK ---
+import vertexai
+from vertexai.generative_models import GenerativeModel, GenerationConfig
+
+# Other Google Cloud dependencies (keep if needed for RAG later)
+# from google.cloud import firestore
+# from google.cloud import storage
 
 # Multilingual support
 from googletrans import Translator
 from langdetect import detect
-import unicodedata
 
-# Speech processing
-import speech_recognition as sr
-import pyttsx3
-
-# Database and utilities
-import pandas as pd
-from config import Config
+# Configuration
+from config import Config # Make sure config.py exists and is correct
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class GeminiChatbot:
-    """Enhanced multilingual chatbot using Google Gemini API for PGRKAM digital platform"""
-    
+    """Streamlined multilingual chatbot using Google Vertex AI (Gemini)"""
+
     def __init__(self):
         self.config = Config()
         self.translator = Translator()
-        self.recognizer = sr.Recognizer()
-        self.tts_engine = pyttsx3.init()
-        self.setup_gemini()
-        self.setup_tts()
-        self.setup_database()
-        self.setup_vector_store()
-        
-    def setup_gemini(self):
-        """Configure Google Gemini API"""
+        self.setup_vertex_ai()
+        self.setup_local_database()
+        self.setup_vector_store() # Placeholder
+
+    def setup_vertex_ai(self):
+        """Configure Google Vertex AI (Gemini)"""
         try:
-            genai.configure(api_key=self.config.GEMINI_API_KEY)
-            self.model = genai.GenerativeModel(self.config.GEMINI_MODEL)
-            logger.info("Gemini API configured successfully")
+            PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", self.config.PROJECT_ID)
+            LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", self.config.LOCATION)
+
+            if not PROJECT_ID:
+                raise ValueError("GOOGLE_CLOUD_PROJECT not set in config or environment.")
+
+            vertexai.init(project=PROJECT_ID, location=LOCATION)
+            # Ensure config.GEMINI_MODEL is correctly set (e.g., "gemini-1.0-pro")
+            self.model = GenerativeModel(self.config.GEMINI_MODEL)
+            logger.info(f"Vertex AI initialized successfully in project {PROJECT_ID}, location {LOCATION} with model {self.config.GEMINI_MODEL}")
         except Exception as e:
-            logger.error(f"Error configuring Gemini API: {e}")
+            logger.error(f"Error configuring Vertex AI: {e}", exc_info=True)
+            self.model = None
             raise
-    
-    def setup_tts(self):
-        """Configure text-to-speech engine"""
-        self.tts_engine.setProperty('rate', self.config.SPEECH_RATE)
-        self.tts_engine.setProperty('volume', self.config.SPEECH_VOLUME)
-        
-        # Try to set voice gender
-        voices = self.tts_engine.getProperty('voices')
-        if voices:
-            if self.config.VOICE_GENDER.lower() == 'female':
-                for voice in voices:
-                    if 'female' in voice.name.lower() or 'woman' in voice.name.lower():
-                        self.tts_engine.setProperty('voice', voice.id)
-                        break
-            else:
-                for voice in voices:
-                    if 'male' in voice.name.lower() or 'man' in voice.name.lower():
-                        self.tts_engine.setProperty('voice', voice.id)
-                        break
-    
-    def setup_database(self):
-        """Initialize database - supports both SQLite and Cloud SQL"""
-        try:
-            if self.config.CLOUD_SQL_CONNECTION_NAME:
-                # Use Cloud SQL for production
-                self.setup_cloud_sql()
-            else:
-                # Use local SQLite for development
-                self.setup_local_database()
-            
-            logger.info("Database initialized successfully")
-        except Exception as e:
-            logger.error(f"Database setup error: {e}")
-            # Fallback to local SQLite
-            self.setup_local_database()
-    
+
     def setup_local_database(self):
         """Setup local SQLite database"""
-        self.conn = sqlite3.connect('chatbot.db')
-        cursor = self.conn.cursor()
-        
-        # Create tables
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                preferred_language TEXT DEFAULT 'en',
-                preferences TEXT DEFAULT '{}'
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                query TEXT,
-                response TEXT,
-                language TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                query_type TEXT DEFAULT 'text',
-                FOREIGN KEY (session_id) REFERENCES users (session_id)
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS job_preferences (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                category TEXT,
-                keywords TEXT,
-                location TEXT,
-                experience_level TEXT,
-                FOREIGN KEY (session_id) REFERENCES users (session_id)
-            )
-        ''')
-        
-        self.conn.commit()
-    
-    def setup_cloud_sql(self):
-        """Setup Google Cloud SQL database"""
+        db_path = getattr(self.config, 'SQLITE_DB_PATH', 'chatbot.db') # Get path from config or default
         try:
-            # Initialize Cloud SQL connector
-            connector = Connector()
-            
-            # Create connection to Cloud SQL
-            def getconn():
-                conn = connector.connect(
-                    self.config.CLOUD_SQL_CONNECTION_NAME,
-                    "pg8000",
-                    user=os.getenv('DB_USER', 'postgres'),
-                    password=os.getenv('DB_PASSWORD', ''),
-                    db=os.getenv('DB_NAME', 'chatbot')
+            # check_same_thread=False allows multiple web requests to use the same connection
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            cursor = self.conn.cursor()
+            # Create tables if they don't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT UNIQUE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    preferred_language TEXT DEFAULT 'en',
+                    preferences TEXT DEFAULT '{}'
                 )
-                return conn
-            
-            # Create SQLAlchemy engine
-            self.engine = sqlalchemy.create_engine(
-                "postgresql+pg8000://",
-                creator=getconn,
-            )
-            
-            # Create tables
-            with self.engine.connect() as conn:
-                conn.execute(sqlalchemy.text('''
-                    CREATE TABLE IF NOT EXISTS users (
-                        id SERIAL PRIMARY KEY,
-                        session_id VARCHAR(255) UNIQUE,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        preferred_language VARCHAR(10) DEFAULT 'en',
-                        preferences TEXT DEFAULT '{}'
-                    )
-                '''))
-                
-                conn.execute(sqlalchemy.text('''
-                    CREATE TABLE IF NOT EXISTS conversations (
-                        id SERIAL PRIMARY KEY,
-                        session_id VARCHAR(255),
-                        query TEXT,
-                        response TEXT,
-                        language VARCHAR(10),
-                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        query_type VARCHAR(20) DEFAULT 'text',
-                        FOREIGN KEY (session_id) REFERENCES users (session_id)
-                    )
-                '''))
-                
-                conn.execute(sqlalchemy.text('''
-                    CREATE TABLE IF NOT EXISTS job_preferences (
-                        id SERIAL PRIMARY KEY,
-                        session_id VARCHAR(255),
-                        category VARCHAR(100),
-                        keywords TEXT,
-                        location VARCHAR(100),
-                        experience_level VARCHAR(50),
-                        FOREIGN KEY (session_id) REFERENCES users (session_id)
-                    )
-                '''))
-                
-                conn.commit()
-            
-            logger.info("Cloud SQL database initialized")
-            
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    query TEXT,
+                    response TEXT,
+                    language TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES users (session_id)
+                )
+            ''')
+            # Removed job_preferences table for simplicity, can be added back if needed
+            self.conn.commit()
+            logger.info(f"SQLite database initialized at {db_path}")
         except Exception as e:
-            logger.error(f"Cloud SQL setup error: {e}")
-            raise
-    
+            logger.error(f"Failed to initialize SQLite database at {db_path}: {e}", exc_info=True)
+            self.conn = None
+
     def setup_vector_store(self):
-        """Initialize vector store using Google Cloud alternatives"""
-        try:
-            if self.config.USE_VERTEX_AI:
-                # Use Vertex AI for embeddings and vector search
-                aiplatform.init(
-                    project=self.config.PROJECT_ID,
-                    location=self.config.LOCATION
-                )
-                logger.info("Vertex AI initialized for vector store")
-            else:
-                # Use Firestore for simple document storage
-                self.db = firestore.Client(project=self.config.PROJECT_ID)
-                logger.info("Firestore initialized for document storage")
-            
-        except Exception as e:
-            logger.error(f"Vector store setup error: {e}")
-            # Continue without vector store for basic functionality
-    
+        """Initialize vector store - Basic Placeholder"""
+        # In a real RAG setup, you'd initialize connection to Vector DB or Search here
+        logger.info("Vector store setup placeholder. RAG features are currently basic.")
+        self.vector_store_active = False # Flag to indicate if RAG is ready
+
     def detect_language(self, text: str) -> str:
-        """Detect the language of input text"""
+        """Detect language, default to English on error or short text"""
         try:
-            # Remove special characters and normalize
-            clean_text = re.sub(r'[^\w\s]', '', text)
-            if len(clean_text) < 3:
+            clean_text = re.sub(r'[^\w\s]', '', text).strip()
+            if len(clean_text) < 5: # Require a bit more text for reliable detection
                 return self.config.DEFAULT_LANGUAGE
-                
             detected = detect(clean_text)
-            
-            # Map detected language to supported languages
-            if detected in ['hi', 'pa']:
+            if detected in ['hi', 'pa', 'en']:
                 return detected
-            elif detected == 'en':
-                return 'en'
             else:
-                return self.config.DEFAULT_LANGUAGE
-                
+                 # If detected language isn't supported, try translation check or default
+                 logger.warning(f"Detected unsupported language '{detected}'. Defaulting.")
+                 return self.config.DEFAULT_LANGUAGE
         except Exception as e:
             logger.error(f"Language detection error: {e}")
             return self.config.DEFAULT_LANGUAGE
-    
-    def translate_text(self, text: str, target_lang: str, source_lang: str = None) -> str:
-        """Translate text to target language"""
+
+    def translate_text(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> str:
+        """Translate text if source and target are different"""
+        effective_source = source_lang or self.detect_language(text)
+        if effective_source == target_lang:
+            return text
         try:
-            if source_lang and source_lang == target_lang:
-                return text
-                
-            result = self.translator.translate(text, dest=target_lang, src=source_lang)
+            result = self.translator.translate(text, dest=target_lang, src=effective_source)
             return result.text
         except Exception as e:
-            logger.error(f"Translation error: {e}")
-            return text
-    
-    def process_voice_input(self, language: str = 'en') -> str:
-        """Process voice input using speech recognition"""
-        try:
-            with sr.Microphone() as source:
-                print("Listening...")
-                self.recognizer.adjust_for_ambient_noise(source)
-                audio = self.recognizer.listen(source, timeout=5)
-                
-            # Use appropriate language for recognition
-            lang_codes = {
-                'en': 'en-US',
-                'hi': 'hi-IN',
-                'pa': 'pa-IN'
-            }
-            
-            lang_code = lang_codes.get(language, 'en-US')
-            text = self.recognizer.recognize_google(audio, language=lang_code)
-            return text
-            
-        except sr.WaitTimeoutError:
-            return "No voice input detected"
-        except sr.UnknownValueError:
-            return "Could not understand the audio"
-        except Exception as e:
-            logger.error(f"Voice recognition error: {e}")
-            return "Voice recognition failed"
-    
-    def speak_text(self, text: str):
-        """Convert text to speech"""
-        try:
-            self.tts_engine.say(text)
-            self.tts_engine.runAndWait()
-        except Exception as e:
-            logger.error(f"Text-to-speech error: {e}")
-    
-    def get_similar_documents(self, query: str, k: int = None) -> List:
-        """Retrieve similar documents using vector search"""
-        if k is None:
-            k = self.config.TOP_K_RESULTS
-            
-        try:
-            if self.config.USE_VERTEX_AI:
-                # Use Vertex AI for similarity search
-                # This is a simplified implementation
-                # In production, you'd use Vertex AI Search or Matching Engine
-                return []
-            else:
-                # Use Firestore for simple text search
-                docs_ref = self.db.collection('documents')
-                docs = docs_ref.where('content', '>=', query).limit(k).stream()
-                return [doc.to_dict() for doc in docs]
-                
-        except Exception as e:
-            logger.error(f"Vector search error: {e}")
-            return []
-    
+            logger.error(f"Translation error from '{effective_source}' to '{target_lang}': {e}")
+            return text # Return original text on error
+
+    def get_similar_documents(self, query: str, k: int = 3) -> List:
+        """Retrieve similar documents - Placeholder"""
+        if self.vector_store_active:
+            logger.info(f"Searching vector store for: '{query[:50]}...'")
+            # --- Add your actual vector search logic here ---
+            # Example: results = vector_db.similarity_search(query, k=k)
+            # return results
+            pass
+        logger.debug("No active vector store for RAG.")
+        return [] # Return empty list if RAG is not active
+
     def generate_response(self, query: str, context_docs: List, language: str) -> str:
-        """Generate response using Gemini with context"""
+        """Generate response using Vertex AI (Gemini) with context"""
+        if not self.model:
+            logger.error("Gemini model not initialized.")
+            return "AI model unavailable."
         try:
-            # Create context from retrieved documents
-            context = "\n".join([doc.get('content', '') if isinstance(doc, dict) else str(doc) for doc in context_docs])
-            
-            # Create language-specific prompt
+            # Build context string safely
+            context_parts = [doc.get('content', '') for doc in context_docs if isinstance(doc, dict) and 'content' in doc]
+            context = "\n".join(context_parts).strip()
+            if context:
+                 logger.info(f"Using {len(context_docs)} documents for context.")
+                 context_prompt_part = f"Context:\n{context}\n"
+            else:
+                 context_prompt_part = "Context: No relevant documents found.\n"
+
+
+            # Define prompts
             prompts = {
-                'en': f"""
-                You are a helpful assistant for the PGRKAM (Punjab Government Recruitment and Knowledge Acquisition Mission) digital platform. 
-                Answer the following question based on the provided context about job search, skill development, and foreign counseling.
-                
-                Context: {context}
-                
-                Question: {query}
-                
-                Provide a helpful, accurate response. If the information is not in the context, say so politely and provide general guidance.
-                """,
-                'hi': f"""
-                आप PGRKAM (पंजाब सरकार भर्ती और ज्ञान अधिग्रहण मिशन) डिजिटल प्लेटफॉर्म के लिए एक सहायक हैं।
-                नौकरी खोज, कौशल विकास और विदेशी परामर्श के बारे में प्रदान की गई जानकारी के आधार पर निम्नलिखित प्रश्न का उत्तर दें।
-                
-                संदर्भ: {context}
-                
-                प्रश्न: {query}
-                
-                एक सहायक, सटीक प्रतिक्रिया प्रदान करें। यदि जानकारी संदर्भ में नहीं है, तो विनम्रता से कहें और सामान्य मार्गदर्शन दें।
-                """,
-                'pa': f"""
-                ਤੁਸੀਂ PGRKAM (ਪੰਜਾਬ ਸਰਕਾਰ ਭਰਤੀ ਅਤੇ ਗਿਆਨ ਪ੍ਰਾਪਤੀ ਮਿਸ਼ਨ) ਡਿਜੀਟਲ ਪਲੇਟਫਾਰਮ ਲਈ ਇੱਕ ਸਹਾਇਕ ਹੋ।
-                ਨੌਕਰੀ ਖੋਜ, ਹੁਨਰ ਵਿਕਾਸ ਅਤੇ ਵਿਦੇਸ਼ੀ ਸਲਾਹ ਮਸ਼ਵਰੇ ਬਾਰੇ ਪ੍ਰਦਾਨ ਕੀਤੀ ਗਈ ਜਾਣਕਾਰੀ ਦੇ ਆਧਾਰ 'ਤੇ ਹੇਠਾਂ ਦਿੱਤੇ ਸਵਾਲ ਦਾ ਜਵਾਬ ਦਿਓ।
-                
-                ਸੰਦਰਭ: {context}
-                
-                ਸਵਾਲ: {query}
-                
-                ਇੱਕ ਸਹਾਇਕ, ਸਹੀ ਜਵਾਬ ਪ੍ਰਦਾਨ ਕਰੋ। ਜੇ ਜਾਣਕਾਰੀ ਸੰਦਰਭ ਵਿੱਚ ਨਹੀਂ ਹੈ, ਤਾਂ ਨਮਰਤਾ ਨਾਲ ਕਹੋ ਅਤੇ ਆਮ ਗਾਈਡੇਂਸ ਦਿਓ।
-                """
+                 'en': f"You are a helpful assistant for PGRKAM. Answer the user's question based ONLY on the provided context if available. If not, provide general guidance relevant to PGRKAM's services (job search, skills, foreign counseling in Punjab).\n\n{context_prompt_part}\nQuestion: {query}\n\nAnswer in English:",
+                 'hi': f"आप PGRKAM के सहायक हैं। केवल दिए गए संदर्भ के आधार पर उत्तर दें यदि उपलब्ध हो। यदि नहीं, तो PGRKAM सेवाओं (पंजाब में नौकरी खोज, कौशल, विदेशी परामर्श) से संबंधित सामान्य मार्गदर्शन प्रदान करें।\n\n{context_prompt_part}\nप्रश्न: {query}\n\nउत्तर हिंदी में दें:",
+                 'pa': f"ਤੁਸੀਂ PGRKAM ਲਈ ਸਹਾਇਕ ਹੋ। ਸਿਰਫ਼ ਦਿੱਤੇ ਸੰਦਰਭ ਦੇ ਆਧਾਰ 'ਤੇ ਜਵਾਬ ਦਿਓ ਜੇਕਰ ਉਪਲਬਧ ਹੋਵੇ। ਜੇਕਰ ਨਹੀਂ, ਤਾਂ PGRKAM ਸੇਵਾਵਾਂ (ਪੰਜਾਬ ਵਿੱਚ ਨੌਕਰੀ ਦੀ ਖੋਜ, ਹੁਨਰ, ਵਿਦੇਸ਼ੀ ਸਲਾਹ) ਨਾਲ ਸੰਬੰਧਿਤ ਆਮ ਮਾਰਗਦਰਸ਼ਨ ਪ੍ਰਦਾਨ ਕਰੋ।\n\n{context_prompt_part}\nਸਵਾਲ: {query}\n\nਜਵਾਬ ਪੰਜਾਬੀ ਵਿੱਚ ਦਿਓ:"
             }
-            
             prompt = prompts.get(language, prompts['en'])
-            
-            # Generate response using Gemini
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=self.config.MAX_TOKENS,
-                    temperature=self.config.TEMPERATURE,
-                )
+
+            # Configure generation parameters from config
+            generation_config = GenerationConfig(
+                max_output_tokens=getattr(self.config, 'MAX_TOKENS', 1024),
+                temperature=getattr(self.config, 'TEMPERATURE', 0.7),
             )
+
+            # Generate response
+            response = self.model.generate_content(prompt, generation_config=generation_config)
+            
+            # Check for safety ratings or blocked responses if needed
+            # if response.prompt_feedback.block_reason: ... handle safety blocks ...
             
             return response.text
-            
-        except Exception as e:
-            logger.error(f"Response generation error: {e}")
-            return "I apologize, but I'm having trouble generating a response at the moment."
-    
-    def save_conversation(self, session_id: str, query: str, response: str, 
-                         language: str, query_type: str = 'text'):
-        """Save conversation to database"""
-        try:
-            if self.config.CLOUD_SQL_CONNECTION_NAME:
-                # Save to Cloud SQL
-                with self.engine.connect() as conn:
-                    conn.execute(sqlalchemy.text('''
-                        INSERT INTO conversations (session_id, query, response, language, query_type)
-                        VALUES (:session_id, :query, :response, :language, :query_type)
-                    '''), {
-                        'session_id': session_id,
-                        'query': query,
-                        'response': response,
-                        'language': language,
-                        'query_type': query_type
-                    })
-                    conn.commit()
-            else:
-                # Save to local SQLite
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    INSERT INTO conversations (session_id, query, response, language, query_type)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (session_id, query, response, language, query_type))
-                self.conn.commit()
-                
-        except Exception as e:
-            logger.error(f"Database save error: {e}")
-    
-    def get_user_preferences(self, session_id: str) -> Dict:
-        """Get user preferences from database"""
-        try:
-            if self.config.CLOUD_SQL_CONNECTION_NAME:
-                # Get from Cloud SQL
-                with self.engine.connect() as conn:
-                    result = conn.execute(sqlalchemy.text('''
-                        SELECT preferences FROM users WHERE session_id = :session_id
-                    '''), {'session_id': session_id}).fetchone()
-                    
-                    if result:
-                        return json.loads(result[0])
-                    return {}
-            else:
-                # Get from local SQLite
-                cursor = self.conn.cursor()
-                cursor.execute('SELECT preferences FROM users WHERE session_id = ?', (session_id,))
-                result = cursor.fetchone()
-                
-                if result:
-                    return json.loads(result[0])
-                return {}
-                
-        except Exception as e:
-            logger.error(f"Error getting preferences: {e}")
-            return {}
-    
-    def update_user_preferences(self, session_id: str, preferences: Dict):
-        """Update user preferences in database"""
-        try:
-            if self.config.CLOUD_SQL_CONNECTION_NAME:
-                # Update Cloud SQL
-                with self.engine.connect() as conn:
-                    conn.execute(sqlalchemy.text('''
-                        INSERT INTO users (session_id, preferences)
-                        VALUES (:session_id, :preferences)
-                        ON CONFLICT (session_id) DO UPDATE SET preferences = :preferences
-                    '''), {
-                        'session_id': session_id,
-                        'preferences': json.dumps(preferences)
-                    })
-                    conn.commit()
-            else:
-                # Update local SQLite
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    INSERT OR REPLACE INTO users (session_id, preferences)
-                    VALUES (?, ?)
-                ''', (session_id, json.dumps(preferences)))
-                self.conn.commit()
-                
-        except Exception as e:
-            logger.error(f"Error updating preferences: {e}")
-    
-    def recommend_jobs(self, session_id: str, query: str) -> List[Dict]:
-        """Generate job recommendations based on user preferences and query"""
-        try:
-            preferences = self.get_user_preferences(session_id)
-            
-            # Enhanced job recommendations for PGRKAM
-            job_recommendations = [
-                {
-                    'title': 'Software Developer',
-                    'company': 'Tech Corp India',
-                    'location': 'Chandigarh',
-                    'category': 'Technology',
-                    'experience': '2-5 years',
-                    'description': 'Looking for skilled software developers with Python experience.',
-                    'salary': '₹4-8 LPA',
-                    'application_deadline': '2024-12-31'
-                },
-                {
-                    'title': 'Administrative Officer',
-                    'company': 'Punjab Government',
-                    'location': 'Various Locations',
-                    'category': 'Government Jobs',
-                    'experience': '1-3 years',
-                    'description': 'Administrative officer position in Punjab government departments.',
-                    'salary': '₹3-5 LPA',
-                    'application_deadline': '2024-12-15'
-                },
-                {
-                    'title': 'Skill Development Trainer',
-                    'company': 'Punjab Skill Development Mission',
-                    'location': 'Ludhiana',
-                    'category': 'Skill Development',
-                    'experience': '3-7 years',
-                    'description': 'Trainer for digital literacy and communication skills programs.',
-                    'salary': '₹3-6 LPA',
-                    'application_deadline': '2024-12-20'
-                },
-                {
-                    'title': 'Foreign Education Counselor',
-                    'company': 'PGRKAM Counseling Center',
-                    'location': 'Amritsar',
-                    'category': 'Foreign Counseling',
-                    'experience': '2-4 years',
-                    'description': 'Guide students for study abroad opportunities and visa applications.',
-                    'salary': '₹3-5 LPA',
-                    'application_deadline': '2024-12-25'
-                }
-            ]
-            
-            # Filter based on preferences
-            filtered_jobs = []
-            for job in job_recommendations:
-                if preferences.get('preferred_category') and job['category'] == preferences['preferred_category']:
-                    filtered_jobs.append(job)
-                elif not preferences.get('preferred_category'):
-                    filtered_jobs.append(job)
-            
-            return filtered_jobs[:self.config.MAX_JOB_RECOMMENDATIONS]
-            
-        except Exception as e:
-            logger.error(f"Job recommendation error: {e}")
-            return []
-    
-    def process_query(self, query: str, session_id: str = 'default', 
-                     language: str = None, input_type: str = 'text') -> Dict:
-        """Main method to process user queries"""
-        try:
-            # Detect language if not provided
-            if not language:
-                language = self.detect_language(query)
-            
-            # Get or create user preferences
-            preferences = self.get_user_preferences(session_id)
-            if not preferences:
-                preferences = {
-                    'preferred_language': language,
-                    'preferred_category': None,
-                    'experience_level': None
-                }
-                self.update_user_preferences(session_id, preferences)
-            
-            # Get similar documents for context
-            context_docs = self.get_similar_documents(query)
-            
-            # Generate response
-            response = self.generate_response(query, context_docs, language)
-            
-            # Check if query is about jobs and provide recommendations
-            job_keywords = ['job', 'naukri', 'ਨੌਕਰੀ', 'career', 'employment', 'vacancy', 'position']
-            if any(keyword in query.lower() for keyword in job_keywords):
-                job_recommendations = self.recommend_jobs(session_id, query)
-                if job_recommendations:
-                    response += "\n\n🎯 Job Recommendations:\n"
-                    for i, job in enumerate(job_recommendations, 1):
-                        response += f"{i}. **{job['title']}** at {job['company']}\n"
-                        response += f"   📍 Location: {job['location']}\n"
-                        response += f"   💼 Experience: {job['experience']}\n"
-                        response += f"   💰 Salary: {job['salary']}\n"
-                        response += f"   📅 Deadline: {job['application_deadline']}\n\n"
-            
-            # Save conversation
-            self.save_conversation(session_id, query, response, language, input_type)
-            
-            return {
-                'response': response,
-                'language': language,
-                'input_type': input_type,
-                'session_id': session_id,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            logger.error(f"Query processing error: {e}")
-            return {
-                'response': "I apologize, but I encountered an error processing your request.",
-                'language': language or 'en',
-                'input_type': input_type,
-                'session_id': session_id,
-                'timestamp': datetime.now().isoformat(),
-                'error': str(e)
-            }
-    
-    def get_conversation_history(self, session_id: str, limit: int = 10) -> List[Dict]:
-        """Get conversation history for a session"""
-        try:
-            if self.config.CLOUD_SQL_CONNECTION_NAME:
-                # Get from Cloud SQL
-                with self.engine.connect() as conn:
-                    result = conn.execute(sqlalchemy.text('''
-                        SELECT query, response, language, timestamp, query_type
-                        FROM conversations 
-                        WHERE session_id = :session_id 
-                        ORDER BY timestamp DESC 
-                        LIMIT :limit
-                    '''), {'session_id': session_id, 'limit': limit}).fetchall()
-                    
-                    history = []
-                    for row in result:
-                        history.append({
-                            'query': row[0],
-                            'response': row[1],
-                            'language': row[2],
-                            'timestamp': row[3],
-                            'query_type': row[4]
-                        })
-                    
-                    return history
-            else:
-                # Get from local SQLite
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    SELECT query, response, language, timestamp, query_type
-                    FROM conversations 
-                    WHERE session_id = ? 
-                    ORDER BY timestamp DESC 
-                    LIMIT ?
-                ''', (session_id, limit))
-                
-                history = []
-                for row in cursor.fetchall():
-                    history.append({
-                        'query': row[0],
-                        'response': row[1],
-                        'language': row[2],
-                        'timestamp': row[3],
-                        'query_type': row[4]
-                    })
-                
-                return history
-                
-        except Exception as e:
-            logger.error(f"Error getting conversation history: {e}")
-            return []
 
-if __name__ == "__main__":
-    # Example usage
-    chatbot = GeminiChatbot()
-    
-    print("PGRKAM Digital Assistant - Gemini-Powered Chatbot")
-    print("Supported languages: English, Hindi, Punjabi")
-    print("Type 'voice' for voice input, 'history' for conversation history, 'quit' to exit")
-    print("-" * 60)
-    
-    session_id = "demo_session"
-    
-    while True:
-        user_input = input("\nYou: ").strip()
+        except Exception as e:
+            logger.error(f"Vertex AI response generation error: {e}", exc_info=True)
+            return "Apologies, I encountered an error generating the response."
+
+    def save_conversation(self, session_id: str, query: str, response: str, language: str):
+        """Save conversation to SQLite database"""
+        if not self.conn:
+            logger.warning("Database connection not available. Skipping conversation save.")
+            return
+        try:
+            cursor = self.conn.cursor()
+            # Ensure user exists before saving conversation
+            cursor.execute('INSERT OR IGNORE INTO users (session_id, preferred_language) VALUES (?, ?)', (session_id, language))
+            # Save conversation
+            cursor.execute('''
+                INSERT INTO conversations (session_id, query, response, language)
+                VALUES (?, ?, ?, ?)
+            ''', (session_id, query, response, language))
+            self.conn.commit()
+            logger.debug(f"Saved conversation for session {session_id}")
+        except Exception as e:
+            logger.error(f"SQLite save_conversation error: {e}", exc_info=True)
+
+    def get_user_preferences(self, session_id: str) -> Dict:
+        """Get user preferences from SQLite"""
+        if not self.conn: return {}
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT preferences FROM users WHERE session_id = ?', (session_id,))
+            result = cursor.fetchone()
+            if result and result[0]:
+                try:
+                    return json.loads(result[0])
+                except json.JSONDecodeError:
+                     logger.error(f"Failed to parse preferences JSON for session {session_id}")
+                     return {}
+            return {} # Return empty dict if no user or no preferences found
+        except Exception as e:
+             logger.error(f"SQLite get_user_preferences error: {e}", exc_info=True)
+             return {}
+
+    def update_user_preferences(self, session_id: str, preferences: Dict):
+        """Update user preferences in SQLite"""
+        if not self.conn: return
+        try:
+            cursor = self.conn.cursor()
+            # Ensure user exists first, update language if needed
+            cursor.execute('INSERT OR IGNORE INTO users (session_id, preferred_language) VALUES (?, ?)',
+                           (session_id, preferences.get('preferred_language', self.config.DEFAULT_LANGUAGE)))
+            # Update preferences JSON
+            cursor.execute('''
+                UPDATE users SET preferences = ? WHERE session_id = ?
+            ''', (json.dumps(preferences), session_id))
+            self.conn.commit()
+            logger.info(f"Updated preferences for session {session_id}")
+        except Exception as e:
+            logger.error(f"SQLite update_user_preferences error: {e}", exc_info=True)
+
+    def process_query(self, query: str, session_id: str = 'default_session', language: Optional[str] = None) -> Dict:
+        """Main method to process user text queries"""
+        logger.info(f"Processing query for session '{session_id}': '{query[:50]}...'")
+        start_time = datetime.now()
         
-        if user_input.lower() == 'quit':
-            break
-        elif user_input.lower() == 'voice':
-            print("Speak now...")
-            voice_text = chatbot.process_voice_input('en')
-            print(f"Voice input: {voice_text}")
-            if voice_text and "failed" not in voice_text.lower():
-                result = chatbot.process_query(voice_text, session_id, input_type='voice')
-                print(f"Assistant: {result['response']}")
-                chatbot.speak_text(result['response'])
-        elif user_input.lower() == 'history':
-            history = chatbot.get_conversation_history(session_id)
-            print("\nConversation History:")
-            for conv in history:
-                print(f"[{conv['timestamp']}] {conv['query_type']}: {conv['query']}")
-                print(f"Response: {conv['response'][:100]}...")
-                print("-" * 40)
-        else:
-            result = chatbot.process_query(user_input, session_id)
-            print(f"Assistant: {result['response']}")
+        # Determine language
+        processing_language = language or self.detect_language(query)
+        logger.info(f"Processing in language: {processing_language}")
+
+        # Get context (RAG - currently returns empty list)
+        context_docs = self.get_similar_documents(query)
+
+        # Generate response
+        response_text = self.generate_response(query, context_docs, processing_language)
+
+        # Save conversation to DB
+        self.save_conversation(session_id, query, response_text, processing_language)
+
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
+        logger.info(f"Query processed in {processing_time:.2f} seconds for session {session_id}")
+
+        return {
+            'response': response_text,
+            'language': processing_language,
+            'session_id': session_id,
+            'timestamp': end_time.isoformat()
+        }
+
+    # Removed get_conversation_history and recommend_jobs for simplicity
+    # They can be added back, ensuring they use the SQLite connection (self.conn)
