@@ -3,7 +3,7 @@ import sqlite3
 import json
 import re
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 import logging
 
 # --- Use Vertex AI SDK ---
