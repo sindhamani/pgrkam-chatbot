@@ -36,22 +36,25 @@ class GeminiChatbot:
         self.setup_vector_store() # Placeholder
 
     def setup_vertex_ai(self):
-        """Configure Google Vertex AI (Gemini)"""
-        try:
-            PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", self.config.PROJECT_ID)
-            LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", self.config.LOCATION)
+    """Configure Google Vertex AI (Gemini)"""
+    try:
+        PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", self.config.PROJECT_ID)
+        # --- TEMPORARY HARDCODING ---
+        LOCATION = "asia-south1-c" # Directly set the location here
+        # --- END TEMPORARY HARDCODING ---
 
-            if not PROJECT_ID:
-                raise ValueError("GOOGLE_CLOUD_PROJECT not set in config or environment.")
+        if not PROJECT_ID:
+             raise ValueError("GOOGLE_CLOUD_PROJECT not set in config or environment.")
 
-            vertexai.init(project=PROJECT_ID, location=LOCATION)
-            # Ensure config.GEMINI_MODEL is correctly set (e.g., "gemini-1.0-pro")
-            self.model = GenerativeModel(self.config.GEMINI_MODEL)
-            logger.info(f"Vertex AI initialized successfully in project {PROJECT_ID}, location {LOCATION} with model {self.config.GEMINI_MODEL}")
-        except Exception as e:
-            logger.error(f"Error configuring Vertex AI: {e}", exc_info=True)
-            self.model = None
-            raise
+        logger.info(f"Attempting Vertex AI init with Project: {PROJECT_ID}, Location: {LOCATION}") # Add log
+        vertexai.init(project=PROJECT_ID, location=LOCATION) # Use the hardcoded variable
+
+        self.model = GenerativeModel(self.config.GEMINI_MODEL)
+        logger.info(f"Vertex AI initialized successfully!")
+    except Exception as e:
+        logger.error(f"FATAL: Error configuring Vertex AI: {e}", exc_info=True)
+        self.model = None
+        raise
 
     def setup_local_database(self):
         """Setup local SQLite database"""
