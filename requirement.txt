@@ -15,8 +15,7 @@ PyMuPDF>=1.23.0
 python-docx>=0.8.11
 
 # Multilingual support
-googletrans>=4.0.0
-langdetect>=1.0.9
+
 indic-transliteration>=2.3.0
 
 # Speech processing

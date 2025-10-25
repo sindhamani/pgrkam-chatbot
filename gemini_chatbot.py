@@ -15,8 +15,8 @@ from vertexai.generative_models import GenerativeModel, GenerationConfig
 # from google.cloud import storage
 
 # Multilingual support
-from googletrans import Translator
-from langdetect import detect
+#from googletrans import Translator
+#from langdetect import detect
 
 # Configuration
 from config import Config # Make sure config.py exists and is correct
@@ -30,7 +30,7 @@ class GeminiChatbot:
 
     def __init__(self):
         self.config = Config()
-        self.translator = Translator()
+        #self.translator = Translator()
         self.setup_vertex_ai()
         self.setup_local_database()
         self.setup_vector_store() # Placeholder
@@ -94,34 +94,34 @@ class GeminiChatbot:
         logger.info("Vector store setup placeholder. RAG features are currently basic.")
         self.vector_store_active = False # Flag to indicate if RAG is ready
 
-    def detect_language(self, text: str) -> str:
-        """Detect language, default to English on error or short text"""
-        try:
-            clean_text = re.sub(r'[^\w\s]', '', text).strip()
-            if len(clean_text) < 5: # Require a bit more text for reliable detection
-                return self.config.DEFAULT_LANGUAGE
-            detected = detect(clean_text)
-            if detected in ['hi', 'pa', 'en']:
-                return detected
-            else:
-                 # If detected language isn't supported, try translation check or default
-                 logger.warning(f"Detected unsupported language '{detected}'. Defaulting.")
-                 return self.config.DEFAULT_LANGUAGE
-        except Exception as e:
-            logger.error(f"Language detection error: {e}")
-            return self.config.DEFAULT_LANGUAGE
+    # def detect_language(self, text: str) -> str:
+    #     """Detect language, default to English on error or short text"""
+    #     try:
+    #         clean_text = re.sub(r'[^\w\s]', '', text).strip()
+    #         if len(clean_text) < 5: # Require a bit more text for reliable detection
+    #             return self.config.DEFAULT_LANGUAGE
+    #         detected = detect(clean_text)
+    #         if detected in ['hi', 'pa', 'en']:
+    #             return detected
+    #         else:
+    #              # If detected language isn't supported, try translation check or default
+    #              logger.warning(f"Detected unsupported language '{detected}'. Defaulting.")
+    #              return self.config.DEFAULT_LANGUAGE
+    #     except Exception as e:
+    #         logger.error(f"Language detection error: {e}")
+    #         return self.config.DEFAULT_LANGUAGE
 
-    def translate_text(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> str:
-        """Translate text if source and target are different"""
-        effective_source = source_lang or self.detect_language(text)
-        if effective_source == target_lang:
-            return text
-        try:
-            result = self.translator.translate(text, dest=target_lang, src=effective_source)
-            return result.text
-        except Exception as e:
-            logger.error(f"Translation error from '{effective_source}' to '{target_lang}': {e}")
-            return text # Return original text on error
+    # def translate_text(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> str:
+    #     """Translate text if source and target are different"""
+    #     effective_source = source_lang or self.detect_language(text)
+    #     if effective_source == target_lang:
+    #         return text
+    #     try:
+    #         result = self.translator.translate(text, dest=target_lang, src=effective_source)
+    #         return result.text
+    #     except Exception as e:
+    #         logger.error(f"Translation error from '{effective_source}' to '{target_lang}': {e}")
+    #         return text # Return original text on error
 
     def get_similar_documents(self, query: str, k: int = 3) -> List:
         """Retrieve similar documents - Placeholder"""
@@ -235,10 +235,23 @@ class GeminiChatbot:
         logger.info(f"Processing query for session '{session_id}': '{query[:50]}...'")
         start_time = datetime.now()
         
-        # Determine language
-        processing_language = language or self.detect_language(query)
-        logger.info(f"Processing in language: {processing_language}")
+        # # Determine language
+        # processing_language = language or self.detect_language(query)
+        # logger.info(f"Processing in language: {processing_language}")
 
+        # Inside the process_query method:
+
+        # --- Remove language detection ---
+        # Determine language
+        # processing_language = language or self.detect_language(query) # REMOVE THIS LINE
+
+        # --- Replace with simpler logic ---
+        processing_language = language or self.config.DEFAULT_LANGUAGE
+        if processing_language not in self.config.SUPPORTED_LANGUAGES:
+            logger.warning(f"Unsupported language '{processing_language}' requested. Defaulting to {self.config.DEFAULT_LANGUAGE}.")
+            processing_language = self.config.DEFAULT_LANGUAGE
+
+        logger.info(f"Processing in language: {processing_language} (Detection disabled)")
         # Get context (RAG - currently returns empty list)
         context_docs = self.get_similar_documents(query)
 
