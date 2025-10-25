@@ -1,16 +1,181 @@
-# flask_app.py (Test Code)
-from flask import Flask, jsonify
-import datetime
+# flask_app.py (with embedded test GUI)
+import os
+import logging
+from datetime import datetime
+from flask import Flask, request, jsonify, render_template_string
+from flask_cors import CORS
 
+# Import the specific chatbot class
+try:
+    from gemini_chatbot import GeminiChatbot
+    from config import Config
+except ImportError as e:
+    logging.critical(f"CRITICAL: Failed to import core modules: {e}")
+    GeminiChatbot = None
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Initialize Flask app
 app = Flask(__name__)
 
+# Configure CORS (allow requests *from* this page to itself and potentially Hostinger)
+origins = ["https://pkgassist.site", "http://pkgassist.site", "https://api.pkgassist.site"] # Add API domain
+CORS(app, resources={r"/*": {"origins": origins}})
+
+# Initialize chatbot safely
+chatbot_instance = None
+if GeminiChatbot:
+    try:
+        chatbot_instance = GeminiChatbot()
+        logger.info("Chatbot initialized successfully in Flask app.")
+    except Exception as e:
+        logger.error(f"FATAL: Chatbot initialization failed in Flask app: {e}", exc_info=True)
+else:
+     logger.error("FATAL: GeminiChatbot class not imported, cannot initialize chatbot.")
+
+
+# --- HTML Template for the Test GUI ---
+HTML_TEST_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Backend Test</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f0f0f0; }
+        .chat-container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .chat-box { height: 400px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; background: #f9f9f9; }
+        .message { margin-bottom: 10px; padding: 8px 12px; border-radius: 15px; max-width: 80%; word-wrap: break-word; }
+        .user-message { background-color: #d1eaff; margin-left: auto; text-align: right; }
+        .bot-message { background-color: #e2e3e5; margin-right: auto; }
+        .input-area { display: flex; gap: 10px; }
+        #userInput { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        #sendButton { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        #sendButton:hover { background-color: #0056b3; }
+        #status { margin-top: 15px; font-size: 0.9em; color: #555; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <h2>Backend Test Chat</h2>
+        <div class="chat-box" id="chatBox">
+             <div class="bot-message">Backend Status: {{ status }}. Type a message to test Gemini.</div>
+        </div>
+        <div class="input-area">
+            <input type="text" id="userInput" placeholder="Type your message..." onkeypress="handleKeyPress(event)">
+            <button id="sendButton" onclick="sendMessage()">Send</button>
+        </div>
+        <div id="status">Ready.</div>
+    </div>
+
+    <script>
+        const chatBox = document.getElementById('chatBox');
+        const userInput = document.getElementById('userInput');
+        const sendButton = document.getElementById('sendButton');
+        const statusDiv = document.getElementById('status');
+
+        function addMessage(text, senderClass) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', senderClass);
+            messageDiv.textContent = text;
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight; // Scroll down
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            addMessage(message, 'user-message');
+            userInput.value = '';
+            statusDiv.textContent = 'Sending...';
+            sendButton.disabled = true;
+
+            try {
+                // Send POST request to the /api/chat endpoint ON THIS SERVER
+                const response = await fetch('/api/chat', { // Relative URL works here
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: message }) // Send just the message
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    addMessage(data.reply || 'No reply received.', 'bot-message');
+                    statusDiv.textContent = 'Ready.';
+                } else {
+                    addMessage(`Error ${response.status}: ${data.error || data.reply || 'Unknown error'}`, 'bot-message');
+                    statusDiv.textContent = `Error (${response.status}). Ready.`;
+                }
+
+            } catch (error) {
+                console.error('Fetch error:', error);
+                addMessage(`Network Error: Could not reach backend. ${error}`, 'bot-message');
+                statusDiv.textContent = 'Network Error. Ready.';
+            } finally {
+                 sendButton.disabled = false;
+                 userInput.focus();
+            }
+        }
+         // Add initial status message on load
+        document.addEventListener('DOMContentLoaded', () => {
+             userInput.focus();
+        });
+    </script>
+</body>
+</html>
+"""
+
+# --- API Endpoints ---
+
 @app.route('/')
-def hello():
-    """Returns a simple test message."""
-    return jsonify({
-        "message": "Hello World! API is responding.",
-        "timestamp_utc": datetime.datetime.utcnow().isoformat()
-    })
+def root():
+    """Serve the test HTML chat interface."""
+    backend_status = "Active" if chatbot_instance else "Chatbot Init Failed"
+    return render_template_string(HTML_TEST_TEMPLATE, status=backend_status)
+
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """Handle chat requests (remains the same)"""
+    if not chatbot_instance:
+        return jsonify({'error': 'Chatbot not available', 'reply': 'Service temporarily unavailable.'}), 503
+
+    try:
+        data = request.get_json()
+        if not data: return jsonify({'error': 'Invalid JSON data'}), 400
+
+        query = data.get('message', '').strip() # Changed from 'query' to 'message' to match JS
+        language = data.get('language')
+        session_id = data.get('session_id', 'test_gui_session') # Use a specific session for GUI
+
+        if not query: return jsonify({'error': 'Empty message', 'reply': 'Please provide a question.'}), 400
+
+        logger.info(f"API Test GUI: Received query for session '{session_id}': '{query[:50]}...'")
+        result = chatbot_instance.process_query(query, session_id, language)
+        logger.info(f"API Test GUI: Sending reply for session '{session_id}': '{result.get('response', '')[:50]}...'")
+
+        return jsonify({"reply": result.get('response', 'Error retrieving response.')})
+
+    except Exception as e:
+        logger.error(f"API Test GUI: Chat API error for session '{session_id}': {e}", exc_info=True)
+        return jsonify({'error': 'Internal server error', 'reply': 'Internal error processing request.'}), 500
+
+
+# Gunicorn runs 'app' directly
+if __name__ == '__main__':
+    local_port = int(os.environ.get('PORT', 8081))
+    app.run(host='0.0.0.0', port=local_port, debug=True)
 
 # Note: The if __name__ == '__main__': block is not needed for Gunicorn deployment
 
